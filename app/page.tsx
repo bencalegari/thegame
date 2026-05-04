@@ -1,65 +1,79 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import CitySearch from '@/components/CitySearch';
+import ResultCard from '@/components/ResultCard';
+import LoadingState from '@/components/LoadingState';
+import ErrorState from '@/components/ErrorState';
+import WeightEditor from '@/components/WeightEditor';
+import NationalEventsBanner from '@/components/NationalEventsBanner';
+import type { ApiResponse, GameResult, TierConfig } from '@/lib/types';
+import { DEFAULT_TIER_ORDER } from '@/lib/types';
+
+type AppState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'result'; result: GameResult; city: string }
+  | { status: 'error'; error: 'city_not_found' | 'no_recent_games' | 'api_error'; message: string };
 
 export default function Home() {
+  const [state, setState] = useState<AppState>({ status: 'idle' });
+  const [tiers, setTiers] = useState<TierConfig[]>(DEFAULT_TIER_ORDER);
+
+  async function handleSearch(city: string) {
+    setState({ status: 'loading' });
+    try {
+      const res = await fetch('/api/game', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city, tierOrder: tiers.map((t) => t.id) }),
+      });
+      const data: ApiResponse = await res.json();
+      if (data.success) {
+        setState({ status: 'result', result: data.result, city: data.city });
+      } else {
+        setState({ status: 'error', error: data.error, message: data.message });
+      }
+    } catch {
+      setState({
+        status: 'error',
+        error: 'api_error',
+        message: 'Something went wrong. Please try again.',
+      });
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-gray-800 flex flex-col items-center justify-start px-4 py-16">
+      <div className="mb-10 text-center">
+        <h1 className="text-5xl font-black text-white tracking-tight mb-2">
+          The Game
+        </h1>
+        <p className="text-white/50 text-lg max-w-sm">
+          Someone mentioned &ldquo;the game.&rdquo; Based on where you are, here&apos;s what they meant.
+        </p>
+      </div>
+
+      <div className="flex flex-col items-center gap-6 w-full max-w-md">
+        <NationalEventsBanner />
+        <WeightEditor tiers={tiers} onChange={setTiers} />
+        <CitySearch onSearch={handleSearch} loading={state.status === 'loading'} />
+      </div>
+
+      <div className="mt-8 w-full flex justify-center">
+        {state.status === 'loading' && <LoadingState />}
+        {state.status === 'result' && (
+          <ResultCard result={state.result} city={state.city} />
+        )}
+        {state.status === 'error' && (
+          <ErrorState error={state.error} message={state.message} />
+        )}
+        {state.status === 'idle' && (
+          <p className="text-center text-white/20 text-sm mt-4">
+            Enter a city above to find out what everyone&apos;s talking about.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        )}
+      </div>
+    </main>
   );
 }
