@@ -1,3 +1,5 @@
+import { ESPN_HEADERS } from './espn-client';
+
 export interface NationalEvent {
   id: string;
   name: string;
@@ -78,7 +80,7 @@ async function fetchEspnNationalEvents(): Promise<NationalEvent[]> {
   const results = await Promise.allSettled(
     ESPN_SPORT_CONFIGS.map(async (config) => {
       const url = `https://site.api.espn.com/apis/site/v2/sports/${config.path}/scoreboard?limit=10`;
-      const res = await fetch(url, { next: { revalidate: 900 } }); // 15 min cache
+      const res = await fetch(url, { headers: ESPN_HEADERS, next: { revalidate: 900 } }); // 15 min cache
       if (!res.ok) return [];
       const data = await res.json();
       const events: NationalEvent[] = [];

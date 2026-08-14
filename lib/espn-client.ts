@@ -108,22 +108,86 @@ function normalizeGame(raw: any, sport: Sport, league: League): NormalizedGame |
   }
 }
 
-async function fetchScoreboard(sport: Sport, league: League, path: string, dateStr: string): Promise<NormalizedGame[]> {
+// ESPN rejects some datacenter traffic that arrives without a browser-ish
+// User-Agent, which is the usual reason this works locally but not on a VPS.
+export const ESPN_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+  Accept: 'application/json, text/plain, */*',
+};
+
+export interface ScoreboardFetch {
+  league: League;
+  dateStr: string;
+  url: string;
+  ok: boolean;
+  httpStatus: number | null;
+  eventCount: number;
+  games: NormalizedGame[];
+  error: string | null;
+}
+
+async function fetchScoreboard(
+  sport: Sport,
+  league: League,
+  path: string,
+  dateStr: string,
+  cacheSeconds: number
+): Promise<ScoreboardFetch> {
   const url = `${ESPN_BASE}/${path}/scoreboard?dates=${dateStr}&limit=100`;
+  const base = { league, dateStr, url };
+  const init: RequestInit =
+    cacheSeconds > 0
+      ? { headers: ESPN_HEADERS, next: { revalidate: cacheSeconds } }
+      : { headers: ESPN_HEADERS, cache: 'no-store' };
   try {
-    const res = await fetch(url, { next: { revalidate: 300 } });
-    if (!res.ok) return [];
+    const res = await fetch(url, init);
+    if (!res.ok) {
+      return { ...base, ok: false, httpStatus: res.status, eventCount: 0, games: [], error: `HTTP ${res.status}` };
+    }
     const data = await res.json();
-    const events: NormalizedGame[] = (data.events ?? [])
-      .map((e: unknown) => normalizeGame(e, sport, league))
+    const rawEvents: unknown[] = data.events ?? [];
+    const games: NormalizedGame[] = rawEvents
+      .map((e) => normalizeGame(e, sport, league))
       .filter((g: NormalizedGame | null): g is NormalizedGame => g !== null);
-    return events;
-  } catch {
-    return [];
+    return { ...base, ok: true, httpStatus: res.status, eventCount: rawEvents.length, games, error: null };
+  } catch (err) {
+    const cause = (err as { cause?: { code?: string } })?.cause?.code;
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ...base,
+      ok: false,
+      httpStatus: null,
+      eventCount: 0,
+      games: [],
+      error: cause ? `${message} (${cause})` : message,
+    };
   }
 }
 
-export async function fetchRecentGames(daysBack: number = 3): Promise<NormalizedGame[]> {
+export interface RecentGamesReport {
+  serverTime: string;
+  timeZone: string;
+  month: number;
+  dates: string[];
+  activeLeagues: League[];
+  fetches: ScoreboardFetch[];
+  games: NormalizedGame[];
+}
+
+function dedupe(games: NormalizedGame[]): NormalizedGame[] {
+  const seen = new Set<string>();
+  return games.filter((g) => {
+    if (seen.has(g.id)) return false;
+    seen.add(g.id);
+    return true;
+  });
+}
+
+export async function fetchRecentGamesReport(
+  daysBack: number = 3,
+  cacheSeconds: number = 300
+): Promise<RecentGamesReport> {
   const now = new Date();
   const month = now.getMonth() + 1;
 
@@ -141,18 +205,48 @@ export async function fetchRecentGames(daysBack: number = 3): Promise<Normalized
 
   const activeLeagues = LEAGUE_CONFIG.filter((l) => l.activeMonths.includes(month));
 
-  const fetches = activeLeagues.flatMap((config) =>
-    dates.map((dateStr) => fetchScoreboard(config.sport, config.league, config.path, dateStr))
+  const fetches = await Promise.all(
+    activeLeagues.flatMap((config) =>
+      dates.map((dateStr) =>
+        fetchScoreboard(config.sport, config.league, config.path, dateStr, cacheSeconds)
+      )
+    )
   );
 
-  const results = await Promise.all(fetches);
-  const allGames = results.flat();
+  return {
+    serverTime: now.toISOString(),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    month,
+    dates,
+    activeLeagues: activeLeagues.map((l) => l.league),
+    fetches,
+    games: dedupe(fetches.flatMap((f) => f.games)),
+  };
+}
 
-  // Deduplicate by id
-  const seen = new Set<string>();
-  return allGames.filter((g) => {
-    if (seen.has(g.id)) return false;
-    seen.add(g.id);
-    return true;
-  });
+export class EspnUnreachableError extends Error {
+  constructor(public readonly detail: string) {
+    super(`ESPN unreachable: ${detail}`);
+    this.name = 'EspnUnreachableError';
+  }
+}
+
+export async function fetchRecentGames(daysBack: number = 3): Promise<NormalizedGame[]> {
+  const report = await fetchRecentGamesReport(daysBack);
+
+  const failed = report.fetches.filter((f) => !f.ok);
+  if (failed.length > 0) {
+    // Surface in Coolify container logs — previously these were swallowed silently.
+    for (const f of failed) {
+      console.error(`[espn] ${f.league} ${f.dateStr} failed: ${f.error} — ${f.url}`);
+    }
+  }
+
+  // Every request failed: this is a connectivity/blocking problem, not "no games".
+  if (report.fetches.length > 0 && failed.length === report.fetches.length) {
+    const reasons = [...new Set(failed.map((f) => f.error))].join(', ');
+    throw new EspnUnreachableError(`${failed.length}/${report.fetches.length} requests failed (${reasons})`);
+  }
+
+  return report.games;
 }

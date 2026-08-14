@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lookupCity } from '@/lib/location-teams';
-import { fetchRecentGames } from '@/lib/espn-client';
+import { fetchRecentGames, EspnUnreachableError } from '@/lib/espn-client';
 import { selectTheGame } from '@/lib/game-selector';
 import type { ApiResponse, TierId } from '@/lib/types';
 
@@ -40,12 +40,14 @@ export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse>>
   let allGames;
   try {
     allGames = await fetchRecentGames(3);
-  } catch {
+  } catch (err) {
+    const detail = err instanceof EspnUnreachableError ? err.detail : String(err);
+    console.error('[api/game] ESPN fetch failed:', detail);
     return NextResponse.json(
       {
         success: false,
         error: 'api_error',
-        message: 'Could not reach ESPN right now. Please try again in a moment.',
+        message: `Could not reach ESPN from the server (${detail}). Check outbound network access for this container.`,
       },
       { status: 503 }
     );

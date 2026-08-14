@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Emits .next/standalone so the Docker runtime stage ships without node_modules.
+  output: 'standalone',
 };
 
 export default nextConfig;
