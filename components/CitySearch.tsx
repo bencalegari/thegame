@@ -94,7 +94,7 @@ export default function CitySearch({ onSearch, loading }: Props) {
   const showDropdown = focused && suggestions.length > 0;
 
   return (
-    <div className="relative w-full max-w-md">
+    <div className="relative z-20 w-full max-w-md">
       <div className="flex gap-2">
         <div className="relative flex-1">
           <input

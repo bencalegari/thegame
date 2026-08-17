@@ -70,9 +70,9 @@ export default function Home() {
       </div>
 
       <div className="flex flex-col items-center gap-6 w-full max-w-md">
+        <CitySearch onSearch={handleSearch} loading={state.status === 'loading'} />
         <NationalEventsBanner />
         <WeightEditor tiers={tiers} onChange={setTiers} />
-        <CitySearch onSearch={handleSearch} loading={state.status === 'loading'} />
       </div>
 
       <div className="mt-8 w-full flex flex-col items-center">
