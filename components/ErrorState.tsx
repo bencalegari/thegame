@@ -1,10 +1,11 @@
 interface Props {
-  error: 'city_not_found' | 'no_recent_games' | 'api_error';
+  error: 'city_not_found' | 'ambiguous_city' | 'no_recent_games' | 'api_error';
   message: string;
 }
 
 const ERROR_ICONS: Record<string, string> = {
   city_not_found: '📍',
+  ambiguous_city: '🗺️',
   no_recent_games: '📅',
   api_error: '📡',
 };

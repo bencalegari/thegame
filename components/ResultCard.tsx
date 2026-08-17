@@ -12,6 +12,8 @@ const LEAGUE_LABELS: Record<string, string> = {
   nba: 'NBA',
   mlb: 'MLB',
   nhl: 'NHL',
+  cfb: 'College Football',
+  cbb: 'College Basketball',
 };
 
 const LEAGUE_COLORS: Record<string, string> = {
@@ -19,6 +21,8 @@ const LEAGUE_COLORS: Record<string, string> = {
   nba: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
   mlb: 'bg-red-500/20 text-red-300 border-red-500/30',
   nhl: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30',
+  cfb: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  cbb: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
 };
 
 const SPORT_ICONS: Record<string, string> = {
@@ -69,9 +73,14 @@ export default function ResultCard({ result, city }: Props) {
               PLAYOFFS
             </span>
           )}
-          {game.isChampionship && (
+          {game.championshipLevel === 'national' && (
             <span className="rounded-full bg-yellow-500/20 px-3 py-1 text-xs font-semibold text-yellow-300 border border-yellow-500/30">
               🏆 CHAMPIONSHIP
+            </span>
+          )}
+          {game.championshipLevel === 'conference' && (
+            <span className="rounded-full bg-yellow-500/10 px-3 py-1 text-xs font-semibold text-yellow-200/80 border border-yellow-500/20">
+              CONFERENCE TITLE
             </span>
           )}
         </div>
@@ -83,7 +92,10 @@ export default function ResultCard({ result, city }: Props) {
         <p className="mb-1 text-xs text-white/40 uppercase tracking-widest">The Game</p>
         <div className="flex items-center justify-center gap-4">
           <div className="flex-1 text-right">
-            <p className="text-lg font-bold text-white leading-tight">{awayTeam.name}</p>
+            <p className="text-lg font-bold text-white leading-tight">
+              {awayTeam.rank && <span className="text-white/50 mr-1">#{awayTeam.rank}</span>}
+              {awayTeam.name}
+            </p>
             <p className="text-xs text-white/40">{awayTeam.abbreviation} (away)</p>
           </div>
           <div className="flex flex-col items-center">
@@ -98,7 +110,10 @@ export default function ResultCard({ result, city }: Props) {
             )}
           </div>
           <div className="flex-1 text-left">
-            <p className="text-lg font-bold text-white leading-tight">{homeTeam.name}</p>
+            <p className="text-lg font-bold text-white leading-tight">
+              {homeTeam.rank && <span className="text-white/50 mr-1">#{homeTeam.rank}</span>}
+              {homeTeam.name}
+            </p>
             <p className="text-xs text-white/40">{homeTeam.abbreviation} (home)</p>
           </div>
         </div>
@@ -136,6 +151,9 @@ export default function ResultCard({ result, city }: Props) {
       {/* Timestamp */}
       <p className="text-center text-xs text-white/30">
         {formatDate(game.date)} · {city}
+        {result.distanceMiles !== null && result.nearestTeam && (
+          <> · {result.nearestTeam.shortName} plays {result.distanceMiles} mi away</>
+        )}
       </p>
     </div>
   );

@@ -1,40 +1,77 @@
 'use client';
 
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
-import { getAllCityNames } from '@/lib/location-teams';
+import type { PlaceSummary } from '@/lib/types';
+
+export interface CitySelection {
+  placeId?: string;
+  text: string;
+  label: string;
+}
 
 interface Props {
-  onSearch: (city: string) => void;
+  onSearch: (selection: CitySelection) => void;
   loading: boolean;
 }
 
-const ALL_CITIES = getAllCityNames().sort();
-
 export default function CitySearch({ onSearch, loading }: Props) {
   const [input, setInput] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<PlaceSummary[]>([]);
   const [focused, setFocused] = useState(false);
   const [highlighted, setHighlighted] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLUListElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const suppressRef = useRef(false);
 
   useEffect(() => {
-    if (!input.trim()) {
+    const query = input.trim();
+    if (suppressRef.current) {
+      suppressRef.current = false;
+      return;
+    }
+    if (query.length < 2) {
       setSuggestions([]);
       setHighlighted(-1);
       return;
     }
-    const q = input.toLowerCase();
-    const matches = ALL_CITIES.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 8);
-    setSuggestions(matches);
-    setHighlighted(-1);
+
+    const timer = setTimeout(async () => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const res = await fetch(`/api/places?q=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+        });
+        const data: { places: PlaceSummary[] } = await res.json();
+        setSuggestions(data.places ?? []);
+        setHighlighted(-1);
+      } catch {
+        setHighlighted(-1);
+      }
+    }, 150);
+
+    return () => clearTimeout(timer);
   }, [input]);
 
-  function submit(city: string) {
-    if (!city.trim() || loading) return;
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  function submitPlace(place: PlaceSummary) {
+    if (loading) return;
+    suppressRef.current = true;
     setSuggestions([]);
-    setInput(city);
-    onSearch(city.trim());
+    setHighlighted(-1);
+    setInput(place.label);
+    onSearch({ placeId: place.id, text: place.label, label: place.label });
+  }
+
+  function submitText(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+    suppressRef.current = true;
+    setSuggestions([]);
+    setHighlighted(-1);
+    onSearch({ text: trimmed, label: trimmed });
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -46,11 +83,8 @@ export default function CitySearch({ onSearch, loading }: Props) {
       setHighlighted((h) => Math.max(h - 1, -1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (highlighted >= 0 && suggestions[highlighted]) {
-        submit(suggestions[highlighted]);
-      } else {
-        submit(input);
-      }
+      if (highlighted >= 0 && suggestions[highlighted]) submitPlace(suggestions[highlighted]);
+      else submitText(input);
     } else if (e.key === 'Escape') {
       setSuggestions([]);
       setHighlighted(-1);
@@ -71,7 +105,7 @@ export default function CitySearch({ onSearch, loading }: Props) {
             onKeyDown={handleKeyDown}
             onFocus={() => setFocused(true)}
             onBlur={() => setTimeout(() => setFocused(false), 150)}
-            placeholder="Enter a US city..."
+            placeholder="Enter any US city..."
             aria-label="City name"
             aria-autocomplete="list"
             aria-expanded={showDropdown}
@@ -80,29 +114,32 @@ export default function CitySearch({ onSearch, loading }: Props) {
           />
           {showDropdown && (
             <ul
-              ref={listRef}
               role="listbox"
               className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-xl border border-white/20 bg-gray-900/95 backdrop-blur-sm shadow-xl"
             >
-              {suggestions.map((city, i) => (
+              {suggestions.map((place, i) => (
                 <li
-                  key={city}
+                  key={place.id}
                   role="option"
                   aria-selected={i === highlighted}
-                  onMouseDown={() => submit(city)}
+                  onMouseDown={() => submitPlace(place)}
                   onMouseEnter={() => setHighlighted(i)}
                   className={`cursor-pointer px-4 py-2.5 text-sm transition-colors ${
                     i === highlighted ? 'bg-white/20 text-white' : 'text-white/70 hover:bg-white/10'
                   }`}
                 >
-                  {city}
+                  {place.label}
                 </li>
               ))}
             </ul>
           )}
         </div>
         <button
-          onClick={() => submit(highlighted >= 0 && suggestions[highlighted] ? suggestions[highlighted] : input)}
+          onClick={() =>
+            highlighted >= 0 && suggestions[highlighted]
+              ? submitPlace(suggestions[highlighted])
+              : submitText(input)
+          }
           disabled={loading || !input.trim()}
           className="rounded-xl bg-white px-5 py-3 font-semibold text-gray-900 transition-all hover:bg-white/90 disabled:opacity-40 disabled:cursor-not-allowed"
         >

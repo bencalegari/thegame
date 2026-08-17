@@ -1,46 +1,103 @@
-import type { NormalizedGame, League, Sport, GameStatus } from './types';
+import type { ChampionshipLevel, NormalizedGame, League, Sport, GameStatus } from './types';
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
 
-const LEAGUE_CONFIG: Array<{ sport: Sport; league: League; path: string; activeMonths: number[] }> = [
+interface LeagueConfig {
+  sport: Sport;
+  league: League;
+  path: string;
+  activeMonths: number[];
+  championshipMonths: number[];
+  query?: Record<string, string>;
+  limit: number;
+  daysBack: number;
+  cacheSeconds: number;
+}
+
+export const LEAGUE_CONFIG: LeagueConfig[] = [
   {
     sport: 'football',
     league: 'nfl',
     path: 'football/nfl',
     activeMonths: [9, 10, 11, 12, 1, 2],
+    championshipMonths: [2],
+    limit: 100,
+    daysBack: 3,
+    cacheSeconds: 300,
   },
   {
     sport: 'basketball',
     league: 'nba',
     path: 'basketball/nba',
     activeMonths: [10, 11, 12, 1, 2, 3, 4, 5, 6],
+    championshipMonths: [6],
+    limit: 100,
+    daysBack: 3,
+    cacheSeconds: 300,
   },
   {
     sport: 'baseball',
     league: 'mlb',
     path: 'baseball/mlb',
     activeMonths: [3, 4, 5, 6, 7, 8, 9, 10],
+    championshipMonths: [10, 11],
+    limit: 100,
+    daysBack: 3,
+    cacheSeconds: 300,
   },
   {
     sport: 'hockey',
     league: 'nhl',
     path: 'hockey/nhl',
     activeMonths: [10, 11, 12, 1, 2, 3, 4, 5, 6],
+    championshipMonths: [6],
+    limit: 100,
+    daysBack: 3,
+    cacheSeconds: 300,
+  },
+  {
+    sport: 'football',
+    league: 'cfb',
+    path: 'football/college-football',
+    activeMonths: [8, 9, 10, 11, 12, 1],
+    championshipMonths: [1],
+    query: { groups: '80' },
+    limit: 300,
+    daysBack: 8,
+    cacheSeconds: 600,
+  },
+  {
+    sport: 'basketball',
+    league: 'cbb',
+    path: 'basketball/mens-college-basketball',
+    activeMonths: [11, 12, 1, 2, 3, 4],
+    championshipMonths: [3, 4],
+    query: { groups: '50' },
+    limit: 400,
+    daysBack: 3,
+    cacheSeconds: 600,
   },
 ];
 
-const CHAMPIONSHIP_KEYWORDS = [
+const NATIONAL_CHAMPIONSHIP_KEYWORDS = [
   'super bowl',
   'nba finals',
   'world series',
-  'stanley cup',
-  'nfl championship',
-  'nba championship',
+  'stanley cup final',
+  'national championship',
+  'ncaa championship game',
 ];
 
-function isChampionshipGame(headline: string | null, notes: string[]): boolean {
-  const texts = [headline, ...notes].map((t) => (t ?? '').toLowerCase());
-  return texts.some((t) => CHAMPIONSHIP_KEYWORDS.some((kw) => t.includes(kw)));
+const CONFERENCE_CHAMPIONSHIP_PATTERN = /championship|title game|conference tournament/;
+
+function classifyChampionship(headline: string | null, notes: string[]): ChampionshipLevel {
+  const text = [headline, ...notes]
+    .map((t) => (t ?? '').toLowerCase())
+    .join(' | ');
+  if (!text.trim()) return null;
+  if (NATIONAL_CHAMPIONSHIP_KEYWORDS.some((kw) => text.includes(kw))) return 'national';
+  if (CONFERENCE_CHAMPIONSHIP_PATTERN.test(text)) return 'conference';
+  return null;
 }
 
 function toDateString(date: Date): string {
@@ -56,6 +113,28 @@ function normalizeStatus(statusName: string): GameStatus {
   return 'scheduled';
 }
 
+function normalizeRank(value: unknown): number | null {
+  const rank = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(rank) || rank < 1 || rank > 25) return null;
+  return rank;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rawCompetitorIds(raw: any): { home: string; away: string } | null {
+  const competitors = raw?.competitions?.[0]?.competitors;
+  if (!Array.isArray(competitors) || competitors.length < 2) return null;
+  const home = competitors.find((c: any) => c.homeAway === 'home') ?? competitors[0];
+  const away = competitors.find((c: any) => c.homeAway === 'away') ?? competitors[1];
+  return { home: String(home?.team?.id ?? ''), away: String(away?.team?.id ?? '') };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rawLooksLikeChampionship(raw: any): boolean {
+  const comp = raw?.competitions?.[0];
+  const notes: string[] = (comp?.notes ?? []).map((n: any) => String(n?.headline ?? ''));
+  return classifyChampionship(notes[0] ?? null, notes) !== null;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeGame(raw: any, sport: Sport, league: League): NormalizedGame | null {
   try {
@@ -65,17 +144,18 @@ function normalizeGame(raw: any, sport: Sport, league: League): NormalizedGame |
     const statusName = comp.status?.type?.name ?? 'STATUS_SCHEDULED';
     const status = normalizeStatus(statusName);
 
-    const competitors: Array<{ id: string; name: string; abbreviation: string; score: number; homeAway: string }> =
-      (comp.competitors ?? []).map((c: any) => ({
-        id: String(c.team?.id ?? ''),
-        name: c.team?.displayName ?? c.team?.name ?? '',
-        abbreviation: c.team?.abbreviation ?? '',
-        score: parseInt(c.score ?? '0', 10) || 0,
-        homeAway: c.homeAway ?? 'away',
-      }));
+    const competitors = (comp.competitors ?? []).map((c: any) => ({
+      id: String(c.team?.id ?? ''),
+      name: c.team?.displayName ?? c.team?.name ?? '',
+      shortName: c.team?.location ?? c.team?.shortDisplayName ?? c.team?.name ?? '',
+      abbreviation: c.team?.abbreviation ?? '',
+      score: parseInt(c.score ?? '0', 10) || 0,
+      rank: normalizeRank(c.curatedRank?.current),
+      homeAway: c.homeAway ?? 'away',
+    }));
 
-    const home = competitors.find((c) => c.homeAway === 'home') ?? competitors[0];
-    const away = competitors.find((c) => c.homeAway === 'away') ?? competitors[1];
+    const home = competitors.find((c: { homeAway: string }) => c.homeAway === 'home') ?? competitors[0];
+    const away = competitors.find((c: { homeAway: string }) => c.homeAway === 'away') ?? competitors[1];
     if (!home || !away) return null;
 
     const notes: string[] = (comp.notes ?? []).map((n: any) => String(n.headline ?? ''));
@@ -96,11 +176,25 @@ function normalizeGame(raw: any, sport: Sport, league: League): NormalizedGame |
       date: new Date(raw.date ?? comp.date ?? Date.now()),
       status,
       seasonType: (raw.season?.type ?? 2) as 1 | 2 | 3,
-      isChampionship: isChampionshipGame(headline, notes),
+      championshipLevel: classifyChampionship(headline, notes),
       seriesSummary,
       headline,
-      homeTeam: { id: home.id, name: home.name, abbreviation: home.abbreviation, score: home.score },
-      awayTeam: { id: away.id, name: away.name, abbreviation: away.abbreviation, score: away.score },
+      homeTeam: {
+        id: home.id,
+        name: home.name,
+        shortName: home.shortName,
+        abbreviation: home.abbreviation,
+        score: home.score,
+        rank: home.rank,
+      },
+      awayTeam: {
+        id: away.id,
+        name: away.name,
+        shortName: away.shortName,
+        abbreviation: away.abbreviation,
+        score: away.score,
+        rank: away.rank,
+      },
       winner,
     };
   } catch {
@@ -123,42 +217,82 @@ export interface ScoreboardFetch {
   ok: boolean;
   httpStatus: number | null;
   eventCount: number;
+  truncated: boolean;
   games: NormalizedGame[];
   error: string | null;
 }
 
-async function fetchScoreboard(
-  sport: Sport,
-  league: League,
-  path: string,
-  dateStr: string,
-  cacheSeconds: number
-): Promise<ScoreboardFetch> {
-  const url = `${ESPN_BASE}/${path}/scoreboard?dates=${dateStr}&limit=100`;
-  const base = { league, dateStr, url };
+export type KeepPredicate = (league: League, homeId: string, awayId: string) => boolean;
+
+const memo = new Map<string, { expiresAt: number; body: unknown }>();
+
+async function fetchJson(url: string, cacheSeconds: number): Promise<unknown> {
+  if (cacheSeconds > 0) {
+    const hit = memo.get(url);
+    if (hit && hit.expiresAt > Date.now()) return hit.body;
+  }
+
   const init: RequestInit =
     cacheSeconds > 0
       ? { headers: ESPN_HEADERS, next: { revalidate: cacheSeconds } }
       : { headers: ESPN_HEADERS, cache: 'no-store' };
+
+  const res = await fetch(url, init);
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { httpStatus: res.status });
+
+  const body = await res.json();
+  if (cacheSeconds > 0) {
+    memo.set(url, { expiresAt: Date.now() + cacheSeconds * 1000, body });
+  }
+  return body;
+}
+
+async function fetchScoreboard(
+  config: LeagueConfig,
+  dateRange: string,
+  cacheSeconds: number,
+  keep?: KeepPredicate
+): Promise<ScoreboardFetch> {
+  const params = new URLSearchParams({
+    dates: dateRange,
+    limit: String(config.limit),
+    ...(config.query ?? {}),
+  });
+  const url = `${ESPN_BASE}/${config.path}/scoreboard?${params}`;
+  const base = { league: config.league, dateStr: dateRange, url };
+
   try {
-    const res = await fetch(url, init);
-    if (!res.ok) {
-      return { ...base, ok: false, httpStatus: res.status, eventCount: 0, games: [], error: `HTTP ${res.status}` };
-    }
-    const data = await res.json();
+    const data = (await fetchJson(url, cacheSeconds)) as { events?: unknown[] };
     const rawEvents: unknown[] = data.events ?? [];
-    const games: NormalizedGame[] = rawEvents
-      .map((e) => normalizeGame(e, sport, league))
+    const games = rawEvents
+      .filter((event) => {
+        if (!keep) return true;
+        const ids = rawCompetitorIds(event);
+        if (!ids) return false;
+        return keep(config.league, ids.home, ids.away) || rawLooksLikeChampionship(event);
+      })
+      .map((e) => normalizeGame(e, config.sport, config.league))
       .filter((g: NormalizedGame | null): g is NormalizedGame => g !== null);
-    return { ...base, ok: true, httpStatus: res.status, eventCount: rawEvents.length, games, error: null };
+
+    return {
+      ...base,
+      ok: true,
+      httpStatus: 200,
+      eventCount: rawEvents.length,
+      truncated: rawEvents.length >= config.limit,
+      games,
+      error: rawEvents.length >= config.limit ? `truncated at limit=${config.limit}` : null,
+    };
   } catch (err) {
+    const httpStatus = (err as { httpStatus?: number }).httpStatus ?? null;
     const cause = (err as { cause?: { code?: string } })?.cause?.code;
     const message = err instanceof Error ? err.message : String(err);
     return {
       ...base,
       ok: false,
-      httpStatus: null,
+      httpStatus,
       eventCount: 0,
+      truncated: false,
       games: [],
       error: cause ? `${message} (${cause})` : message,
     };
@@ -169,8 +303,9 @@ export interface RecentGamesReport {
   serverTime: string;
   timeZone: string;
   month: number;
-  dates: string[];
+  leagueWindows: Array<{ league: League; range: string }>;
   activeLeagues: League[];
+  skippedLeagues: League[];
   fetches: ScoreboardFetch[];
   games: NormalizedGame[];
 }
@@ -184,32 +319,40 @@ function dedupe(games: NormalizedGame[]): NormalizedGame[] {
   });
 }
 
-export async function fetchRecentGamesReport(
-  daysBack: number = 3,
-  cacheSeconds: number = 300
-): Promise<RecentGamesReport> {
-  const now = new Date();
+function dateRangeFor(now: Date, daysBack: number): string {
+  const start = new Date(now);
+  start.setDate(start.getDate() - (daysBack - 1));
+  const end = new Date(now);
+  end.setDate(end.getDate() + 1);
+  return `${toDateString(start)}-${toDateString(end)}`;
+}
+
+export interface FetchOptions {
+  leagues?: League[];
+  cacheSeconds?: number;
+  keep?: KeepPredicate;
+  asOf?: Date;
+}
+
+export async function fetchRecentGamesReport(options: FetchOptions = {}): Promise<RecentGamesReport> {
+  const now = options.asOf ?? new Date();
   const month = now.getMonth() + 1;
 
-  const dates: string[] = [];
-  for (let i = 0; i < daysBack; i++) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    dates.push(toDateString(d));
-  }
+  const inSeason = LEAGUE_CONFIG.filter(
+    (l) => l.activeMonths.includes(month) || l.championshipMonths.includes(month)
+  );
+  const requested = options.leagues;
+  const selected = requested ? inSeason.filter((l) => requested.includes(l.league)) : inSeason;
+  const skipped = inSeason.filter((l) => !selected.includes(l));
 
-  // Also include tomorrow to catch games scheduled for today that may appear as tomorrow
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  dates.push(toDateString(tomorrow));
-
-  const activeLeagues = LEAGUE_CONFIG.filter((l) => l.activeMonths.includes(month));
+  const windows = selected.map((config) => ({
+    config,
+    range: dateRangeFor(now, config.daysBack),
+  }));
 
   const fetches = await Promise.all(
-    activeLeagues.flatMap((config) =>
-      dates.map((dateStr) =>
-        fetchScoreboard(config.sport, config.league, config.path, dateStr, cacheSeconds)
-      )
+    windows.map(({ config, range }) =>
+      fetchScoreboard(config, range, options.cacheSeconds ?? config.cacheSeconds, options.keep)
     )
   );
 
@@ -217,8 +360,9 @@ export async function fetchRecentGamesReport(
     serverTime: now.toISOString(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     month,
-    dates,
-    activeLeagues: activeLeagues.map((l) => l.league),
+    leagueWindows: windows.map(({ config, range }) => ({ league: config.league, range })),
+    activeLeagues: selected.map((l) => l.league),
+    skippedLeagues: skipped.map((l) => l.league),
     fetches,
     games: dedupe(fetches.flatMap((f) => f.games)),
   };
@@ -231,8 +375,8 @@ export class EspnUnreachableError extends Error {
   }
 }
 
-export async function fetchRecentGames(daysBack: number = 3): Promise<NormalizedGame[]> {
-  const report = await fetchRecentGamesReport(daysBack);
+export async function fetchRecentGames(options: FetchOptions = {}): Promise<NormalizedGame[]> {
+  const report = await fetchRecentGamesReport(options);
 
   const failed = report.fetches.filter((f) => !f.ok);
   if (failed.length > 0) {
@@ -240,6 +384,10 @@ export async function fetchRecentGames(daysBack: number = 3): Promise<Normalized
     for (const f of failed) {
       console.error(`[espn] ${f.league} ${f.dateStr} failed: ${f.error} — ${f.url}`);
     }
+  }
+
+  for (const f of report.fetches.filter((f) => f.truncated)) {
+    console.warn(`[espn] ${f.league} ${f.dateStr} hit the event limit — some games were not returned`);
   }
 
   // Every request failed: this is a connectivity/blocking problem, not "no games".

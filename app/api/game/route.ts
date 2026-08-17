@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lookupCity } from '@/lib/location-teams';
+import { getPlaceById, resolvePlace, toPlaceSummary } from '@/lib/places';
+import { teamDistances } from '@/lib/teams';
 import { fetchRecentGames, EspnUnreachableError } from '@/lib/espn-client';
 import { selectTheGame } from '@/lib/game-selector';
+import { keepRelevant, relevantLeagues, relevantTeamKeys } from '@/lib/relevance';
 import type { ApiResponse, TierId } from '@/lib/types';
 
 export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse>> {
-  let body: { city?: string; tierOrder?: TierId[] };
+  let body: { placeId?: string; city?: string; tierOrder?: TierId[] };
   try {
     body = await req.json();
   } catch {
@@ -16,30 +18,49 @@ export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse>>
   }
 
   const rawCity = (body.city ?? '').trim();
-  if (!rawCity) {
+  const place = body.placeId ? getPlaceById(body.placeId) : null;
+
+  if (!place && !rawCity) {
     return NextResponse.json(
       { success: false, error: 'city_not_found', message: 'Please enter a city name.' },
       { status: 400 }
     );
   }
 
-  const cityMapping = lookupCity(rawCity);
-  if (!cityMapping) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'city_not_found',
-        message: `We don't recognize "${rawCity}". Try a major US city like Boston, Chicago, or Los Angeles.`,
-      },
-      { status: 404 }
-    );
+  let resolved = place;
+  if (!resolved) {
+    const resolution = resolvePlace(rawCity);
+    if (resolution.kind === 'ambiguous') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'ambiguous_city',
+          message: `There is more than one ${resolution.candidates[0].name}. Which one did you mean?`,
+          candidates: resolution.candidates.map(toPlaceSummary),
+        },
+        { status: 409 }
+      );
+    }
+    if (resolution.kind === 'none') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'city_not_found',
+          message: `We couldn't find a US city called "${rawCity}". Try adding the state, like "Springfield, MO".`,
+        },
+        { status: 404 }
+      );
+    }
+    resolved = resolution.place;
   }
 
-  const localTeamIds = new Set(cityMapping.teams.map((t) => `${t.league}:${t.espnId}`));
+  const distances = teamDistances(resolved);
+  const relevantKeys = relevantTeamKeys(resolved, distances);
+  const leagues = relevantLeagues(resolved, new Date().getMonth() + 1);
 
   let allGames;
   try {
-    allGames = await fetchRecentGames(3);
+    allGames = await fetchRecentGames({ leagues, keep: keepRelevant(relevantKeys) });
   } catch (err) {
     const detail = err instanceof EspnUnreachableError ? err.detail : String(err);
     console.error('[api/game] ESPN fetch failed:', detail);
@@ -53,22 +74,22 @@ export async function POST(req: NextRequest): Promise<NextResponse<ApiResponse>>
     );
   }
 
-  const result = selectTheGame(allGames, localTeamIds, body.tierOrder);
+  const result = selectTheGame(allGames, {
+    place: resolved,
+    teamDistances: distances,
+    tierOrder: body.tierOrder,
+  });
 
   if (!result) {
     return NextResponse.json(
       {
         success: false,
         error: 'no_recent_games',
-        message: `No games found for ${cityMapping.canonicalName} in the last 3 days. Check back on game day!`,
+        message: `No finished games anywhere near ${resolved.label} in the last few days. Check back on game day!`,
       },
       { status: 404 }
     );
   }
 
-  return NextResponse.json({
-    success: true,
-    result,
-    city: cityMapping.canonicalName,
-  });
+  return NextResponse.json({ success: true, result, place: toPlaceSummary(resolved) });
 }

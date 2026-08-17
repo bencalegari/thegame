@@ -20,6 +20,29 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Location data
+
+City and team coordinates live in `data/` and are generated, not hand-maintained:
+
+```bash
+npm run build:data
+```
+
+That script pulls the Census 2024 Gazetteer (places + ZCTAs), the Census sub-county
+population estimates, and the ESPN team/venue endpoints, then writes `data/places.json`
+(~32k US places), `data/teams.json` (~630 pro and college teams with venue coordinates),
+`data/states.json`, and joins them. `data/places-extra.json` and `data/aliases.json` are
+hand-maintained: boroughs, regions, Canadian cities, and nicknames Census has no record of.
+
+Re-run it when teams relocate or a new Gazetteer vintage is published. Coordinate fixes for
+stale ESPN venue records go in `TEAM_COORD_OVERRIDES` in `scripts/build-data.mjs`; the script
+logs any team whose coordinates drift more than 30 miles from its listed venue city.
+
+`GET /api/diagnostics?city=Boston&asOf=20251109` reports how a city resolved, the nearest
+teams with distances, which leagues were fetched, and the top scored candidates with their
+full score breakdown. `asOf` replays a past date, which is how college-season behavior gets
+checked out of season.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
